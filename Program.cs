@@ -1,11 +1,96 @@
 ﻿// See https://aka.ms/new-console-template for more information
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Serilog;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 
-Console.WriteLine("Hello, World!");
+internal class Program
+{
+    private static async Task Main(string[] args)
+    {
+        Console.WriteLine("Hello, World!");
+
+        // ConnectionsController.cs
+        //[ApiController]
+        //[Route("api/[controller]")]
+        //public class ConnectionsController : ControllerBase
+        //{
+        //    private readonly UserConnectionService _service;
+
+        //    public ConnectionsController(UserConnectionService service)
+        //    {
+        //        _service = service;
+        //    }
+
+        //    [HttpPost]
+        //    public async Task<IActionResult> AddConnection([FromBody] ConnectionRequest request)
+        //    {
+        //        await _service.ProcessConnectionEventAsync(request.UserId, request.IP);
+        //        return Accepted();
+        //    }
+
+        //    [HttpGet("search")]
+        //    public async Task<IActionResult> SearchUsersByIp([FromQuery] string ipPrefix)
+        //    {
+        //        var users = await _service.FindUsersByIpPrefixAsync(ipPrefix);
+        //        return Ok(users);
+        //    }
+
+        //    [HttpGet("{userId}/ips")]
+        //    public async Task<IActionResult> GetUserIps(long userId)
+        //    {
+        //        var ips = await _service.GetUserIpsAsync(userId);
+        //        return Ok(ips);
+        //    }
+
+        //    [HttpGet("{userId}/last-connection")]
+        //    public async Task<IActionResult> GetLastConnection(long userId)
+        //    {
+        //        var connection = await _service.GetLastConnectionAsync(userId);
+        //        return Ok(connection);
+        //    }
+        //}
+
+        // Program.cs
+
+
+
+
+        try
+        {
+            var host = Host.CreateDefaultBuilder(args)
+                //.ConfigureAppConfiguration((hostContext, configApp) =>
+                //{
+                //    configApp.AddConfiguration(configuration);
+                //})
+                .ConfigureServices((hostContext, services) =>
+                {
+                    services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromMinutes(1));
+                    services.AddHostedService<Worker>();
+                    services.AddSingleton(Log.Logger);
+                })
+                //.UseSerilog()
+                .Build();
+
+            await host.RunAsync();
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, e.Message);
+        }
+
+        Log.Warning("Dell audit agent stopped");
+        Log.CloseAndFlush();
+    }
+}
 
 // UserConnectionEvent.cs
 public class UserConnectionEvent
@@ -45,7 +130,7 @@ public class AppDbContext : DbContext
 // IUserConnectionRepository.cs
 public interface IUserConnectionRepository
 {
-    Task AddConnectionEventAsync(UserConnectionEvent event);
+    Task AddConnectionEventAsync(UserConnectionEvent @event);
     Task UpdateLastConnectionAsync(LastUserConnection connection);
     Task<List<long>> FindUsersByIpPrefixAsync(string ipPrefix);
     Task<List<string>> GetUserIpsAsync(long userId);
@@ -62,48 +147,53 @@ public class UserConnectionRepository : IUserConnectionRepository
         _context = context;
     }
 
-    public async Task AddConnectionEventAsync(UserConnectionEvent event)
+    public async Task AddConnectionEventAsync(UserConnectionEvent @event)
     {
-        await _context.UserConnectionEvents.AddAsync(event);
-    await _context.SaveChangesAsync();
+        await _context.UserConnectionEvents.AddAsync(@event);
+        await _context.SaveChangesAsync();
     }
 
-public async Task UpdateLastConnectionAsync(LastUserConnection connection)
-{
-    await _context.LastUserConnections
-        .Upsert(connection)
-        .On(u => u.UserId)
-        .WhenMatched(u => new LastUserConnection
-        {
-            LastIP = connection.LastIP,
-            LastConnectionTime = connection.LastConnectionTime
-        })
-        .RunAsync();
-}
+    //public async Task UpdateLastConnectionAsync(LastUserConnection connection)
+    //{
+    //    await _context.LastUserConnections
+    //        .Upsert(connection)
+    //        .On(u => u.UserId)
+    //        .WhenMatched(u => new LastUserConnection
+    //        {
+    //            LastIP = connection.LastIP,
+    //            LastConnectionTime = connection.LastConnectionTime
+    //        })
+    //        .RunAsync();
+    //}
 
-public async Task<List<long>> FindUsersByIpPrefixAsync(string ipPrefix)
-{
-    return await _context.UserConnectionEvents
-        .Where(e => EF.Functions.ILike(e.IP, $"{ipPrefix}%"))
-        .Select(e => e.UserId)
-        .Distinct()
-        .ToListAsync();
-}
+    public async Task<List<long>> FindUsersByIpPrefixAsync(string ipPrefix)
+    {
+        return await _context.UserConnectionEvents
+            .Where(e => EF.Functions.Like(e.IP, $"{ipPrefix}%"))
+            .Select(e => e.UserId)
+            .Distinct()
+            .ToListAsync();
+    }
 
-public async Task<List<string>> GetUserIpsAsync(long userId)
-{
-    return await _context.UserConnectionEvents
-        .Where(e => e.UserId == userId)
-        .Select(e => e.IP)
-        .Distinct()
-        .ToListAsync();
-}
+    public async Task<List<string>> GetUserIpsAsync(long userId)
+    {
+        return await _context.UserConnectionEvents
+            .Where(e => e.UserId == userId)
+            .Select(e => e.IP)
+            .Distinct()
+            .ToListAsync();
+    }
 
-public async Task<LastUserConnection> GetLastConnectionAsync(long userId)
-{
-    return await _context.LastUserConnections
-        .FirstOrDefaultAsync(l => l.UserId == userId);
-}
+    public async Task<LastUserConnection> GetLastConnectionAsync(long userId)
+    {
+        return await _context.LastUserConnections
+            .FirstOrDefaultAsync(l => l.UserId == userId);
+    }
+
+    public Task UpdateLastConnectionAsync(LastUserConnection connection)
+    {
+        throw new NotImplementedException();
+    }
 }
 
 // UserConnectionService.cs
@@ -150,73 +240,31 @@ public class UserConnectionService
     }
 }
 
-// ConnectionsController.cs
-[ApiController]
-[Route("api/[controller]")]
-public class ConnectionsController : ControllerBase
-{
-    private readonly UserConnectionService _service;
+//var builder = WebApplication.CreateBuilder(args);
 
-    public ConnectionsController(UserConnectionService service)
-    {
-        _service = service;
-    }
+//// Configure database
+//builder.Services.AddDbContext<AppDbContext>(options =>
+//    options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreSQL"))
+//    .UseSnakeCaseNamingConvention();
 
-    [HttpPost]
-    public async Task<IActionResult> AddConnection([FromBody] ConnectionRequest request)
-    {
-        await _service.ProcessConnectionEventAsync(request.UserId, request.IP);
-        return Accepted();
-    }
+//// Add services
+//builder.Services.AddScoped<IUserConnectionRepository, UserConnectionRepository>();
+//builder.Services.AddScoped<UserConnectionService>();
 
-    [HttpGet("search")]
-    public async Task<IActionResult> SearchUsersByIp([FromQuery] string ipPrefix)
-    {
-        var users = await _service.FindUsersByIpPrefixAsync(ipPrefix);
-        return Ok(users);
-    }
+//// Configure high performance
+//builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+//builder.Services.AddHealthChecks()
+//    .AddNpgSql(builder.Configuration.GetConnectionString("PostgreSQL"));
 
-    [HttpGet("{userId}/ips")]
-    public async Task<IActionResult> GetUserIps(long userId)
-    {
-        var ips = await _service.GetUserIpsAsync(userId);
-        return Ok(ips);
-    }
+//var app = builder.Build();
 
-    [HttpGet("{userId}/last-connection")]
-    public async Task<IActionResult> GetLastConnection(long userId)
-    {
-        var connection = await _service.GetLastConnectionAsync(userId);
-        return Ok(connection);
-    }
-}
+//// Database migrations
+//using (var scope = app.Services.CreateScope())
+//{
+//    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+//    await db.Database.MigrateAsync();
+//}
 
-// Program.cs
-var builder = WebApplication.CreateBuilder(args);
-
-// Configure database
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreSQL"))
-    .UseSnakeCaseNamingConvention();
-
-// Add services
-builder.Services.AddScoped<IUserConnectionRepository, UserConnectionRepository>();
-builder.Services.AddScoped<UserConnectionService>();
-
-// Configure high performance
-builder.Services.AddDatabaseDeveloperPageExceptionFilter();
-builder.Services.AddHealthChecks()
-    .AddNpgSql(builder.Configuration.GetConnectionString("PostgreSQL"));
-
-var app = builder.Build();
-
-// Database migrations
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
-}
-
-app.MapControllers();
-app.MapHealthChecks("/health");
-app.Run();
+//app.MapControllers();
+//app.MapHealthChecks("/health");
+//app.Run();
